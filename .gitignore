@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local env / secrets
+.env
+
+# Model / embedding caches
+.cache/
+models/
+*.bin
+*.gguf
+
+# OS
+.DS_Store

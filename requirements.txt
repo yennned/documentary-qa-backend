@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+openai==1.59.6
+numpy==2.2.1
+httpx==0.28.1
+# Lexical retrieval for hybrid search (matches exact names/keywords dense misses).
+rank-bm25==0.2.2
+# Local offline embedding fallback (no Ollama / no API key required)
+sentence-transformers==3.3.1
+# Optional cross-encoder reranker is provided by sentence-transformers above.
+# Test deps
+pytest==8.3.4
