@@ -33,5 +33,34 @@ def test_health_and_ask_flows():
 
 def test_ask_validates_empty_question():
     with TestClient(app) as client:
-        r = client.post("/ask", json={"question": ""})
-        assert r.status_code == 422  # pydantic min_length rejects empty
+        # Empty string (min_length) and whitespace-only (validator) are both rejected.
+        assert client.post("/ask", json={"question": ""}).status_code == 422
+        assert client.post("/ask", json={"question": "   "}).status_code == 422
+
+
+def test_stream_emits_tokens_then_sources_and_done():
+    with TestClient(app) as client:
+        main_module.service.llm.stream = lambda messages: iter(["Hello ", "world [1]."])
+
+        with client.stream("POST", "/ask?stream=true",
+                           json={"question": "What did the Victorians add to bread?"}) as r:
+            events = []
+            for line in r.iter_lines():
+                if line.startswith("event:"):
+                    events.append(line.split(":", 1)[1].strip())
+        assert "token" in events and "sources" in events and events[-1] == "done"
+
+
+def test_stream_emits_error_frame_on_llm_failure():
+    with TestClient(app) as client:
+        def boom(messages):
+            raise RuntimeError("provider down")
+            yield  # make it a generator
+
+        main_module.service.llm.stream = boom
+        with client.stream("POST", "/ask?stream=true",
+                           json={"question": "What did the Victorians add to bread?"}) as r:
+            events = [line.split(":", 1)[1].strip()
+                      for line in r.iter_lines() if line.startswith("event:")]
+        # Mid-stream failure surfaces as an explicit error frame, then done.
+        assert "error" in events and events[-1] == "done"

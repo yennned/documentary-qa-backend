@@ -1,4 +1,6 @@
 """Tests for transcript parsing and chunking."""
+import pytest
+
 from app.ingest import build_chunks, load_chunks, parse_segments
 
 SAMPLE = """00:00:05
@@ -35,6 +37,12 @@ def test_single_segment_chunking_alternative():
     chunks = build_chunks(segments, window=1, stride=1)
     assert len(chunks) == 3
     assert [c.timestamp for c in chunks] == ["00:00:05", "00:01:05", "00:02:02"]
+
+
+def test_build_chunks_rejects_stride_greater_than_window():
+    segments = parse_segments(SAMPLE)
+    with pytest.raises(ValueError, match="stride"):
+        build_chunks(segments, window=2, stride=3)
 
 
 def test_real_transcript_has_expected_shape():
