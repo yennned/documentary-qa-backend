@@ -21,7 +21,7 @@ import numpy as np
 
 from .config import Settings
 from .embeddings import EmbeddingClient
-from .index import SearchHit, VectorIndex
+from .index import SearchHit, VectorIndex, top_k_indices
 from .ingest import load_chunks
 from .lexical import BM25Index
 
@@ -30,7 +30,7 @@ _RRF_K = 60  # standard Reciprocal Rank Fusion constant
 
 @dataclass
 class RetrievalResult:
-    hits: list[SearchHit]          # final, ranked sources
+    hits: list[SearchHit]          # final, ranked sources (score = the value that ordered them)
     best_score: float              # top dense cosine (used for the abstain decision)
     in_scope: bool                 # True if the question looks answerable from the transcript
 
@@ -50,28 +50,44 @@ class Retriever:
         self._reranker = None
 
     # --- ranking strategies ------------------------------------------------
-    def _rrf_fuse(self, cosine: np.ndarray, bm25: np.ndarray, top_k: int) -> list[int]:
-        """Fuse dense and lexical rankings with RRF; return fused chunk indices."""
+    def _rrf_fuse(self, cosine: np.ndarray, bm25: np.ndarray, top_k: int) -> list[tuple[int, float]]:
+        """Fuse dense and lexical rankings with RRF.
+
+        Returns ``(chunk_index, fused_score)`` pairs, best first, where the score is
+        normalized so the top result is 1.0 — that score is what callers surface, so the
+        displayed relevance always matches the ordering.
+
+        If BM25 produced no signal at all (no query token appears in any chunk), its
+        ``argsort`` would be a meaningless positional order [0,1,2,…] that injects the
+        first few chunks as spurious lexical hits. In that case we fall back to dense
+        ranking only.
+        """
         n = cosine.shape[0]
         k = min(top_k, n)
-        dense_top = np.argsort(-cosine)[:k]
-        lex_top = np.argsort(-bm25)[:k]
+        dense_top = top_k_indices(cosine, k)
 
         rrf: dict[int, float] = {}
         for rank, idx in enumerate(dense_top):
             rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (_RRF_K + rank)
-        for rank, idx in enumerate(lex_top):
-            rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (_RRF_K + rank)
-        return sorted(rrf, key=lambda i: rrf[i], reverse=True)
+        if float(bm25.max()) > 0.0:  # only fuse lexical when it carries real signal
+            lex_top = top_k_indices(bm25, k)
+            for rank, idx in enumerate(lex_top):
+                rrf[int(idx)] = rrf.get(int(idx), 0.0) + 1.0 / (_RRF_K + rank)
 
-    def _rerank(self, query: str, hits: list[SearchHit]) -> list[SearchHit]:
+        ordered = sorted(rrf.items(), key=lambda kv: kv[1], reverse=True)
+        top = max((s for _, s in ordered), default=1.0) or 1.0
+        return [(idx, score / top) for idx, score in ordered]
+
+    def _rerank(self, query: str, cosine: np.ndarray) -> list[SearchHit]:
         if self._reranker is None:
             from sentence_transformers import CrossEncoder
 
             self._reranker = CrossEncoder(self.settings.reranker_model)
-        scores = self._reranker.predict([(query, h.chunk.text) for h in hits])
-        for hit, score in zip(hits, scores):
-            hit.score = float(score)
+        # Reuse the already-computed cosine to pick candidates — no second matmul.
+        cand_idx = top_k_indices(cosine, self.settings.top_k)
+        chunks = [self.index.chunks[i] for i in cand_idx]
+        scores = self._reranker.predict([(query, c.text) for c in chunks])
+        hits = [SearchHit(chunk=c, score=float(s)) for c, s in zip(chunks, scores)]
         return sorted(hits, key=lambda h: h.score, reverse=True)
 
     # --- public API --------------------------------------------------------
@@ -89,15 +105,13 @@ class Retriever:
             return RetrievalResult(hits=[], best_score=best_score, in_scope=False)
 
         if self.settings.use_reranker:
-            candidates = self.index.search(query_vec, top_k=self.settings.top_k)
-            ranked = self._rerank(question, candidates)
-            kept = ranked[: self.settings.final_k]
+            kept = self._rerank(question, cosine)[: self.settings.final_k]
         else:
             bm25 = self.bm25.scores(question)
-            fused_idx = self._rrf_fuse(cosine, bm25, top_k=self.settings.top_k)
+            fused = self._rrf_fuse(cosine, bm25, top_k=self.settings.top_k)
             kept = [
-                SearchHit(chunk=self.index.chunks[i], score=float(cosine[i]))
-                for i in fused_idx[: self.settings.final_k]
+                SearchHit(chunk=self.index.chunks[i], score=round(score, 4))
+                for i, score in fused[: self.settings.final_k]
             ]
 
         return RetrievalResult(hits=kept, best_score=best_score, in_scope=True)

@@ -17,6 +17,9 @@ def _normalize(vectors: np.ndarray) -> np.ndarray:
     vectors = np.asarray(vectors, dtype=np.float32)
     if vectors.ndim == 1:
         vectors = vectors[None, :]
+    # Scrub any non-finite values first: a single NaN/inf would otherwise poison cosine
+    # scores (cosine.max() -> NaN, making every query look out-of-scope).
+    vectors = np.nan_to_num(vectors, nan=0.0, posinf=0.0, neginf=0.0)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     return vectors / norms

@@ -77,6 +77,12 @@ def build_chunks(segments: list[Segment], window: int = 2, stride: int = 1) -> l
     """
     if window < 1 or stride < 1:
         raise ValueError("window and stride must be >= 1")
+    if stride > window:
+        # A stride larger than the window leaves gaps: segments between consecutive
+        # windows land in no chunk and become unsearchable/uncitable.
+        raise ValueError(
+            f"stride ({stride}) must be <= window ({window}); a larger stride drops transcript segments"
+        )
     if not segments:
         return []
 

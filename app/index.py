@@ -42,16 +42,17 @@ class VectorIndex:
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             return self.matrix @ query  # (n,)
 
-    def search(self, query_vector: np.ndarray, top_k: int) -> list[SearchHit]:
-        """Return the ``top_k`` most similar chunks, highest cosine score first.
 
-        Vectors are pre-normalized, so the dot product equals cosine similarity.
-        """
-        if len(self.chunks) == 0:
-            return []
-        scores = self.cosine_scores(query_vector)
-        k = min(top_k, scores.shape[0])
-        # argpartition for the top-k, then sort just those k by score descending.
-        top_idx = np.argpartition(-scores, k - 1)[:k]
-        top_idx = top_idx[np.argsort(-scores[top_idx])]
-        return [SearchHit(chunk=self.chunks[i], score=float(scores[i])) for i in top_idx]
+def top_k_indices(scores: np.ndarray, k: int) -> np.ndarray:
+    """Return the indices of the ``k`` highest scores, best first.
+
+    Works on any precomputed score array, so callers that already have the cosine
+    vector (e.g. the retriever) don't recompute it.
+    """
+    n = scores.shape[0]
+    if n == 0 or k <= 0:
+        return np.empty((0,), dtype=np.intp)
+    k = min(k, n)
+    # argpartition for the top-k, then sort just those k by score descending.
+    top_idx = np.argpartition(-scores, k - 1)[:k]
+    return top_idx[np.argsort(-scores[top_idx])]
