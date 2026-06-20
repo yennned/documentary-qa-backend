@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     embed_backend: str = "local"
     embed_model: str | None = None  # resolved by backend if unset
     ollama_base_url: str = "http://localhost:11434/v1"
+    # Local chat model for the ollama provider. Single source of truth: the SAME
+    # OLLAMA_MODEL the compose entrypoint pulls and the healthcheck waits for, so the api
+    # always requests the model that was actually pulled (LLM_MODEL still overrides).
+    ollama_model: str = "llama3.1:8b"
 
     # --- Retrieval ---
     chunk_segments: int = Field(2, ge=1)   # transcript segments grouped per chunk
@@ -96,12 +100,16 @@ class Settings(BaseSettings):
                 f"Unknown LLM_PROVIDER={self.llm_provider!r}. Known: {', '.join(PROVIDERS)}"
             )
         entry = PROVIDERS[self.llm_provider]
-        # For Ollama the endpoint is driven by OLLAMA_BASE_URL so the same code works on
-        # localhost and inside docker-compose (host "ollama"); other providers use the
-        # registry URL unless explicitly overridden.
-        default_base = self.ollama_base_url if self.llm_provider == "ollama" else entry["base_url"]
+        # For Ollama the endpoint and model are driven by OLLAMA_BASE_URL / OLLAMA_MODEL so
+        # the same code works on localhost and inside docker-compose (host "ollama"), and the
+        # api requests exactly the model the ollama service pulled. Other providers use the
+        # registry defaults unless explicitly overridden.
+        if self.llm_provider == "ollama":
+            default_base, default_model = self.ollama_base_url, self.ollama_model
+        else:
+            default_base, default_model = entry["base_url"], entry["model"]
         base_url = self.llm_base_url or default_base
-        model = self.llm_model or entry["model"]
+        model = self.llm_model or default_model
         # Resolve the API key: explicit override > the provider's named env field.
         key = self.llm_api_key
         if not key and entry["key_env"]:

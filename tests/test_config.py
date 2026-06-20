@@ -27,3 +27,13 @@ def test_top_k_must_cover_final_k():
 def test_chunk_stride_must_not_exceed_window():
     with pytest.raises(ValidationError, match="CHUNK_STRIDE must be <= CHUNK_SEGMENTS"):
         Settings(chunk_segments=2, chunk_stride=3)
+
+
+def test_ollama_model_drives_the_requested_model():
+    # OLLAMA_MODEL must be the single knob: what the api requests == what compose pulls,
+    # so `OLLAMA_MODEL=llama3.2:3b docker compose up` works end-to-end.
+    cfg = Settings(llm_provider="ollama", ollama_model="llama3.2:3b").provider_config()
+    assert cfg["model"] == "llama3.2:3b"
+    # explicit LLM_MODEL still wins
+    cfg2 = Settings(llm_provider="ollama", ollama_model="llama3.2:3b", llm_model="qwen2.5:7b").provider_config()
+    assert cfg2["model"] == "qwen2.5:7b"
