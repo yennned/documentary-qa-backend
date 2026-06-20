@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
+from openai import OpenAIError
 
 from .config import get_settings
 from .llm import LLMClient
@@ -22,6 +23,9 @@ from .retriever import Retriever
 from .schemas import AskRequest, AskResponse, Source
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# Returned when the LLM produces no content despite in-scope context.
+EMPTY_ANSWER_FALLBACK = "I couldn't generate an answer from the transcript for that question."
 
 
 class QAService:
@@ -38,27 +42,49 @@ class QAService:
             for h in hits
         ]
 
-    def answer(self, question: str) -> AskResponse:
+    def _prepare(self, question: str):
+        """Shared retrieval + scope decision for both the blocking and streaming paths.
+
+        Returns (in_scope, messages_or_None, hits). When out-of-scope, messages is None
+        and the caller returns the canned abstention without ever calling the LLM.
+        """
         result = self.retriever.retrieve(question)
         if not result.in_scope:
-            # Out-of-scope: never call the LLM, so it cannot hallucinate an answer.
+            return False, None, []
+        return True, build_messages(question, result.hits), result.hits
+
+    def answer(self, question: str) -> AskResponse:
+        in_scope, messages, hits = self._prepare(question)
+        if not in_scope:
             return AskResponse(answer=OUT_OF_SCOPE_ANSWER, sources=[])
-        messages = build_messages(question, result.hits)
-        answer = self.llm.complete(messages)
-        return AskResponse(answer=answer, sources=self._sources(result.hits))
+        answer = self.llm.complete(messages) or EMPTY_ANSWER_FALLBACK
+        return AskResponse(answer=answer, sources=self._sources(hits))
 
     def stream(self, question: str):
-        """Yield Server-Sent-Events: token deltas, then a final 'sources' event."""
-        result = self.retriever.retrieve(question)
-        if not result.in_scope:
+        """Yield Server-Sent-Events: token deltas, then a final 'sources' event.
+
+        The LLM call runs inside this generator (after the response has started), so its
+        errors can't reach the route handler — we catch them here and emit an 'error'
+        event followed by 'done' so the client is never left hanging on a silent stream.
+        """
+        in_scope, messages, hits = self._prepare(question)
+        if not in_scope:
             yield _sse("token", {"text": OUT_OF_SCOPE_ANSWER})
             yield _sse("sources", {"sources": []})
             yield _sse("done", {})
             return
-        messages = build_messages(question, result.hits)
-        for delta in self.llm.stream(messages):
-            yield _sse("token", {"text": delta})
-        sources = [s.model_dump() for s in self._sources(result.hits)]
+        emitted = False
+        try:
+            for delta in self.llm.stream(messages):
+                emitted = True
+                yield _sse("token", {"text": delta})
+        except Exception as exc:  # provider/connectivity failure mid-stream
+            yield _sse("error", {"detail": f"LLM backend error: {exc}"})
+            yield _sse("done", {})
+            return
+        if not emitted:
+            yield _sse("token", {"text": EMPTY_ANSWER_FALLBACK})
+        sources = [s.model_dump() for s in self._sources(hits)]
         yield _sse("sources", {"sources": sources})
         yield _sse("done", {})
 
@@ -82,7 +108,8 @@ app = FastAPI(title="Documentary Q&A Backend", version="1.0.0", lifespan=lifespa
 
 @app.get("/health")
 def health():
-    assert service is not None
+    if service is None:
+        raise HTTPException(status_code=503, detail="Service not ready")
     return {
         "status": "ok",
         "chunks": len(service.retriever.index),
@@ -94,12 +121,14 @@ def health():
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest, stream: bool = Query(False)):
-    assert service is not None
+    if service is None:  # startup not complete / failed
+        raise HTTPException(status_code=503, detail="Service not ready")
+    if stream:
+        # Streaming errors are handled inside the generator (it runs after this returns).
+        return StreamingResponse(service.stream(req.question), media_type="text/event-stream")
     try:
-        if stream:
-            return StreamingResponse(service.stream(req.question), media_type="text/event-stream")
         return service.answer(req.question)
-    except Exception as exc:  # surface provider/connectivity errors cleanly
+    except OpenAIError as exc:  # only LLM/provider failures become 503
         raise HTTPException(status_code=503, detail=f"LLM backend error: {exc}") from exc
 
 

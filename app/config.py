@@ -94,12 +94,20 @@ class Settings(BaseSettings):
         default_base = self.ollama_base_url if self.llm_provider == "ollama" else entry["base_url"]
         base_url = self.llm_base_url or default_base
         model = self.llm_model or entry["model"]
-        # Resolve the API key: explicit override > the provider's named env field > "ollama".
+        # Resolve the API key: explicit override > the provider's named env field.
         key = self.llm_api_key
         if not key and entry["key_env"]:
             key = getattr(self, entry["key_env"].lower(), None)
         if not key:
-            # Ollama requires a non-empty (but ignored) key; harmless placeholder elsewhere.
+            if entry["key_env"]:
+                # A hosted provider was selected but its key is missing — fail loudly with
+                # the exact variable name instead of sending a placeholder and getting an
+                # opaque 401 back from the provider.
+                raise ValueError(
+                    f"LLM_PROVIDER={self.llm_provider!r} requires {entry['key_env']} to be set "
+                    f"(or pass LLM_API_KEY). See .env.example."
+                )
+            # Ollama requires a non-empty (but ignored) key.
             key = "not-needed"
         return {"base_url": base_url, "api_key": key, "model": model}
 

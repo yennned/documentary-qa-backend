@@ -25,24 +25,23 @@ class LLMClient:
             timeout=settings.request_timeout,
         )
 
+    def _create_kwargs(self, messages: list[dict[str, str]]) -> dict:
+        return {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.settings.llm_temperature,
+            "max_tokens": self.settings.llm_max_tokens,
+        }
+
     def complete(self, messages: list[dict[str, str]]) -> str:
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.settings.llm_temperature,
-            max_tokens=self.settings.llm_max_tokens,
-        )
+        resp = self.client.chat.completions.create(**self._create_kwargs(messages))
+        if not resp.choices:
+            return ""
         return (resp.choices[0].message.content or "").strip()
 
     def stream(self, messages: list[dict[str, str]]) -> Iterator[str]:
         """Yield answer text token-by-token (bonus: streaming responses)."""
-        stream = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.settings.llm_temperature,
-            max_tokens=self.settings.llm_max_tokens,
-            stream=True,
-        )
+        stream = self.client.chat.completions.create(**self._create_kwargs(messages), stream=True)
         for chunk in stream:
             if not chunk.choices:
                 continue
