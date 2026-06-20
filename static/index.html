@@ -52,27 +52,47 @@
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let done = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop();
-        for (const evt of events) {
-          const lines = evt.split('\n');
-          const type = (lines.find(l => l.startsWith('event:')) || '').slice(6).trim();
-          const dataLine = (lines.find(l => l.startsWith('data:')) || '').slice(5).trim();
-          if (!dataLine) continue;
-          const data = JSON.parse(dataLine);
-          if (type === 'token') {
-            answerEl.textContent += data.text;
-          } else if (type === 'sources') {
-            renderSources(data.sources);
-          }
+      const processFrame = (evt) => {
+        const lines = evt.split('\n');
+        const type = (lines.find(l => l.startsWith('event:')) || '').slice(6).trim();
+        // SSE allows multiple data: lines per event — join them.
+        const dataLine = lines.filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('\n');
+        if (!type || !dataLine) return;
+        let data;
+        try {
+          data = JSON.parse(dataLine);
+        } catch {
+          return;  // skip a malformed/partial frame instead of killing the stream
         }
+        if (type === 'token') {
+          answerEl.textContent += data.text;
+        } else if (type === 'sources') {
+          renderSources(data.sources);
+        } else if (type === 'error') {
+          answerEl.textContent += `\n[${data.detail || 'stream error'}]`;
+          done = true;
+        } else if (type === 'done') {
+          done = true;
+        }
+      };
+
+      try {
+        while (!done) {
+          const { done: streamEnd, value } = await reader.read();
+          if (streamEnd) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split('\n\n');
+          buffer = events.pop();  // keep the trailing partial frame
+          for (const evt of events) processFrame(evt);
+        }
+        if (buffer.trim()) processFrame(buffer);  // flush any residual frame
+      } catch (e) {
+        answerEl.textContent += `\n[connection error: ${e.message}]`;
+      } finally {
+        go.disabled = false;  // never leave the button stuck
       }
-      go.disabled = false;
     }
 
     function renderSources(sources) {
