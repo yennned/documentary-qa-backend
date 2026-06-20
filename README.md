@@ -66,8 +66,16 @@ LLM_PROVIDER=kimi
 MOONSHOT_API_KEY=sk-...        # from https://platform.moonshot.ai
 ```
 
-Then run the API (e.g. `uvicorn app.main:app`). Other providers work the same way —
-`LLM_PROVIDER=glm|minimax|groq|gemini` with the matching key from `.env.example`.
+Then start **just the API** (no local model needed) — with Docker:
+
+```bash
+docker compose up api      # starts only the api; does not wait for the Ollama pull
+```
+
+or without Docker: `uvicorn app.main:app`. Other providers work the same way —
+`LLM_PROVIDER=glm|minimax|groq|gemini` with the matching key from `.env.example`. If the
+selected provider's key is missing, the service fails fast with a clear message naming the
+exact variable.
 
 | Provider | `LLM_PROVIDER` | Key env var | Get a key |
 |----------|----------------|-------------|-----------|

@@ -13,6 +13,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
+# After the model is cached, force offline mode so the runtime never makes a Hub
+# network call (no startup latency / failures in locked-down environments).
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
 COPY app ./app
 COPY static ./static
 COPY data ./data
