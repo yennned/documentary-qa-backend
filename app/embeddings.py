@@ -126,6 +126,12 @@ class EmbeddingClient:
             )
         return self._openai_client
 
+    def uses_hash_fallback(self) -> bool:
+        """Whether local embeddings are using the built-in hashing fallback."""
+        if self.backend != "local":
+            return False
+        return self._sentence_transformer() is False
+
     # --- public API --------------------------------------------------------
     def embed(self, texts: list[str]) -> np.ndarray:
         """Return an (n, dim) matrix of normalized embeddings for ``texts``."""

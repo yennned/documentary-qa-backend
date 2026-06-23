@@ -56,10 +56,11 @@ hallucination:
    clearly in-scope questions scored ≥0.26 (e.g. Annie Gray 0.26, bread 0.62), while
    clearly off-topic ones scored <0.18 (capital of Australia 0.17, World Cup 0.10). It is
    embedding-model-specific and must be re-tuned if you change models.
-   As a backstop, an exact-token BM25 hit can still mark the query in-scope when it
-   matches at least two content words (or one, for a one-word query), which protects
-   proper-name / exact-term questions when a weaker local fallback embedder under-scores
-   them.
+   When the app has to fall back to the built-in hashing embedder instead of MiniLM, it
+   uses a slightly stricter dense gate (`0.24`) because the fallback's cosine scale is
+   noisier. As a backstop, an exact-token BM25 hit can still mark the query in-scope when
+   the top lexical match contains *all* content tokens from the query, which protects
+   proper-name / exact-term questions without letting broad topical overlap through.
 2. The **LLM abstention prompt** (below) — the primary guard for topically-adjacent
    questions that clear the threshold but aren't actually answered by the passages.
 

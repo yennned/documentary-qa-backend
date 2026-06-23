@@ -94,8 +94,9 @@ class Retriever:
         """Allow exact-token questions through even when dense scores are conservative.
 
         This backstops proper-name / exact-term queries that BM25 clearly matches but a
-        weaker dense embedder may under-score. We require the top lexical hit to share at
-        least half the query's content tokens (rounded up, with a minimum of 1).
+        weaker dense embedder may under-score. To avoid broad topical matches marking an
+        off-topic question as answerable, we only allow this path when the top lexical
+        hit contains every content token from the query.
         """
         query_tokens = tokenize(question)
         if not query_tokens or bm25.size == 0:
@@ -104,8 +105,14 @@ class Retriever:
         if float(bm25[top_idx]) <= 0.0:
             return False
         overlap = self.bm25.overlap_count(question, top_idx)
-        min_overlap = 1 if len(query_tokens) == 1 else 2
-        return overlap >= min_overlap
+        return overlap == len(query_tokens)
+
+    def _scope_threshold(self) -> float:
+        """Use a stricter gate when we had to fall back to hashing embeddings."""
+        threshold = self.settings.score_threshold
+        if self.embedder.uses_hash_fallback():
+            return max(threshold, 0.24)
+        return threshold
 
     # --- public API --------------------------------------------------------
     def retrieve(self, question: str) -> RetrievalResult:
@@ -119,7 +126,7 @@ class Retriever:
         # Scope is primarily gated on the dense cosine, with a lexical backstop for exact
         # names/terms that BM25 clearly matches but a weaker embedder under-scores.
         in_scope = (
-            best_score >= self.settings.score_threshold
+            best_score >= self._scope_threshold()
             or self._lexical_scope_match(question, bm25)
         )
         if not in_scope:
